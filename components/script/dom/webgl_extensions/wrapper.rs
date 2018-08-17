@@ -14,7 +14,7 @@ use super::{WebGLExtension, WebGLExtensions, WebGLExtensionSpec};
 
 /// Trait used internally by WebGLExtensions to store and
 /// handle the different WebGL extensions in a common list.
-pub trait WebGLExtensionWrapper: JSTraceable + MallocSizeOf {
+pub trait WebGLExtensionWrapper: JSTraceable + MallocSizeOf + Sync {
     fn instance_or_init(&self,
                         ctx: &WebGLRenderingContext,
                         ext: &WebGLExtensions)
@@ -95,3 +95,7 @@ impl<T> TypedWebGLExtensionWrapper<T>
         self.extension.get()
     }
 }
+
+#[allow(unsafe_code)]
+unsafe impl<T> Sync for TypedWebGLExtensionWrapper<T>
+    where T: WebGLExtension + JSTraceable + MallocSizeOf + 'static {}

@@ -26,6 +26,8 @@ extern crate bitflags;
 extern crate bluetooth_traits;
 extern crate byteorder;
 extern crate canvas_traits;
+#[macro_use]
+extern crate cascade;
 extern crate caseless;
 extern crate chrono;
 extern crate cookie as cookie_rs;

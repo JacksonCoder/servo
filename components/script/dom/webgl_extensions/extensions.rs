@@ -22,8 +22,37 @@ use std::cell::Ref;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::ptr::NonNull;
-use super::{ext, WebGLExtension, WebGLExtensionSpec};
+use super::{WebGLExtension, WebGLExtensionSpec};
 use super::wrapper::{WebGLExtensionWrapper, TypedWebGLExtensionWrapper};
+use super::ext::*;
+use self::exttexturefilteranisotropic::EXTTextureFilterAnisotropic;
+use self::oestexturehalffloat::OESTextureHalfFloat;
+use self::oesvertexarrayobject::OESVertexArrayObject;
+use self::oestexturefloatlinear::OESTextureFloatLinear;
+use self::oestexturefloat::OESTextureFloat;
+use self::oesstandardderivatives::OESStandardDerivatives;
+use self::oestexturehalffloatlinear::OESTextureHalfFloatLinear;
+use self::oeselementindexuint::OESElementIndexUint;
+
+macro_rules! boxed_extension {
+    ($t: ty) => {
+        Box::new(TypedWebGLExtensionWrapper::<$t>::new())
+    };
+}
+
+lazy_static! {
+    static ref EXT_MAP: HashMap<String, Box<WebGLExtensionWrapper>> = cascade! {
+        HashMap::<String, Box<WebGLExtensionWrapper>>::new();
+        .. insert(EXTTextureFilterAnisotropic::name().to_uppercase(), boxed_extension!(EXTTextureFilterAnisotropic));
+        .. insert(OESTextureHalfFloat::name().to_uppercase(), boxed_extension!(OESTextureHalfFloat));
+        .. insert(OESVertexArrayObject::name().to_uppercase(), boxed_extension!(OESVertexArrayObject));
+        .. insert(OESTextureFloatLinear::name().to_uppercase(), boxed_extension!(OESTextureFloatLinear));
+        .. insert(OESTextureFloat::name().to_uppercase(), boxed_extension!(OESTextureFloat));
+        .. insert(OESStandardDerivatives::name().to_uppercase(), boxed_extension!(OESStandardDerivatives));
+        .. insert(OESTextureHalfFloatLinear::name().to_uppercase(), boxed_extension!(OESTextureHalfFloatLinear));
+        .. insert(OESElementIndexUint::name().to_uppercase(), boxed_extension!(OESElementIndexUint));
+    };
+}
 
 // Data types that are implemented for texImage2D and texSubImage2D in a WebGL 1.0 context
 // but must trigger a InvalidValue error until the related WebGL Extensions are enabled.
@@ -110,7 +139,6 @@ impl WebGLExtensionFeatures {
 #[must_root]
 #[derive(JSTraceable, MallocSizeOf)]
 pub struct WebGLExtensions {
-    extensions: DomRefCell<HashMap<String, Box<WebGLExtensionWrapper>>>,
     features: DomRefCell<WebGLExtensionFeatures>,
     webgl_version: WebGLVersion,
 }
@@ -118,43 +146,36 @@ pub struct WebGLExtensions {
 impl WebGLExtensions {
     pub fn new(webgl_version: WebGLVersion) -> WebGLExtensions {
         Self {
-            extensions: DomRefCell::new(HashMap::new()),
             features: DomRefCell::new(WebGLExtensionFeatures::new(webgl_version)),
             webgl_version,
         }
     }
 
     pub fn init_once<F>(&self, cb: F) where F: FnOnce() -> String {
-        if self.extensions.borrow().len() == 0 {
+        if (*EXT_MAP).len() == 0 {
             let gl_str = cb();
             self.features.borrow_mut().gl_extensions = FnvHashSet::from_iter(gl_str.split(&[',', ' '][..])
                                                                                    .map(|s| s.into()));
-            self.register_all_extensions();
         }
     }
 
-    pub fn register<T:'static + WebGLExtension + JSTraceable + MallocSizeOf>(&self) {
-        let name = T::name().to_uppercase();
-        self.extensions.borrow_mut().insert(name, Box::new(TypedWebGLExtensionWrapper::<T>::new()));
-    }
-
     pub fn get_suported_extensions(&self) -> Vec<&'static str> {
-        self.extensions.borrow().iter()
-                                .filter(|ref v| {
-                                    if let WebGLExtensionSpec::Specific(version) = v.1.spec() {
-                                        if self.webgl_version != version {
-                                            return false;
-                                        }
-                                    }
-                                    v.1.is_supported(&self)
-                                })
-                                .map(|ref v| v.1.name())
-                                .collect()
+        EXT_MAP.values()
+            .filter(|ref v| {
+                if let WebGLExtensionSpec::Specific(version) = v.spec() {
+                    if self.webgl_version != version {
+                        return false;
+                    }
+                }
+                v.is_supported(&self)
+            })
+            .map(|ref v| v.name())
+            .collect()
     }
 
     pub fn get_or_init_extension(&self, name: &str, ctx: &WebGLRenderingContext) -> Option<NonNull<JSObject>> {
         let name = name.to_uppercase();
-        self.extensions.borrow().get(&name).and_then(|extension| {
+        EXT_MAP.get(name.as_str()).and_then(|extension| {
             if extension.is_supported(self) {
                 Some(extension.instance_or_init(ctx, self))
             } else {
@@ -168,7 +189,7 @@ impl WebGLExtensions {
         T: 'static + WebGLExtension + JSTraceable + MallocSizeOf
     {
         let name = T::name().to_uppercase();
-        self.extensions.borrow().get(&name).map_or(false, |ext| { ext.is_enabled() })
+        EXT_MAP.get(name.as_str()).map_or(false, |ext| { ext.is_enabled() })
     }
 
     pub fn get_dom_object<T>(&self) -> Option<DomRoot<T::Extension>>
@@ -176,7 +197,7 @@ impl WebGLExtensions {
         T: 'static + WebGLExtension + JSTraceable + MallocSizeOf
     {
         let name = T::name().to_uppercase();
-        self.extensions.borrow().get(&name).and_then(|extension| {
+        EXT_MAP.get(name.as_str()).and_then(|extension| {
             extension.as_any().downcast_ref::<TypedWebGLExtensionWrapper<T>>().and_then(|extension| {
                 extension.dom_object()
             })
@@ -262,17 +283,6 @@ impl WebGLExtensions {
 
     pub fn is_get_tex_parameter_name_enabled(&self, name: GLenum) -> bool {
         !self.features.borrow().disabled_get_tex_parameter_names.contains(&name)
-    }
-
-    fn register_all_extensions(&self) {
-        self.register::<ext::exttexturefilteranisotropic::EXTTextureFilterAnisotropic>();
-        self.register::<ext::oeselementindexuint::OESElementIndexUint>();
-        self.register::<ext::oesstandardderivatives::OESStandardDerivatives>();
-        self.register::<ext::oestexturefloat::OESTextureFloat>();
-        self.register::<ext::oestexturefloatlinear::OESTextureFloatLinear>();
-        self.register::<ext::oestexturehalffloat::OESTextureHalfFloat>();
-        self.register::<ext::oestexturehalffloatlinear::OESTextureHalfFloatLinear>();
-        self.register::<ext::oesvertexarrayobject::OESVertexArrayObject>();
     }
 
     pub fn enable_element_index_uint(&self) {
